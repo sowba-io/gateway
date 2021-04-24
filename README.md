@@ -1,6 +1,6 @@
 # Sowba Federated OpenAPI Gateway
 
-[![opencoverage](https://open-coverage.org/api/sowba-io/repos/gateway/badge.svg?branch=master&project=api)](https://open-coverage.org/sowba-io/repos/gateway)
+[![opencoverage](https://open-coverage.org/api/sowba-io/repos/gateway/badge.svg?branch=main)](https://open-coverage.org/sowba-io/repos/gateway)
 [![build](https://img.shields.io/github/checks-status/sowba-io/gateway/main?label=Build)](https://github.com/vangheem/opencoverage/actions)
 [![license](https://img.shields.io/github/license/sowba-io/gateway)](https://github.com/vangheem/opencoverage/blob/master/LICENSE)
 
