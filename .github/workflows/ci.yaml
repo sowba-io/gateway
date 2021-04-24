@@ -30,7 +30,7 @@ jobs:
           make lint
           make mypy
   # Job to run tests
-  tests-api:
+  tests:
     runs-on: ubuntu-latest
 
     strategy:
