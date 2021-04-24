@@ -1,0 +1,63 @@
+name: sowba_gateway
+
+on: [push]
+
+jobs:
+  # Job to run pre-checks
+  pre-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8]
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v1
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python - --version=1.1.4
+          source $HOME/.poetry/env
+          make install-dev
+      - name: Run pre-checks
+        run: |
+          source $HOME/.poetry/env
+          make lint
+          make mypy
+  # Job to run tests
+  tests-api:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.8]
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v1
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the package
+        run: |
+          curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python - --version=1.1.4
+          source $HOME/.poetry/env
+          make install-dev
+
+      - name: Run tests
+        run: |
+          source $HOME/.poetry/env
+          make coverage
+
+      - name: Upload coverage to Open Coverage
+        run: |
+          source $HOME/.poetry/env
+          poetry run codecov --url="https://open-coverage.org/api" --token=- --slug=sowba-io/gateway --file=coverage.xml
