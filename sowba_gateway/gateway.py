@@ -1,12 +1,18 @@
 import asyncio
-from sowba_gateway.settings import Settings, Downstream
-import orjson
-import httpx
 import os
-from typing import Any, Dict, List, Tuple
+from typing import (
+    Any,
+    Dict,
+    List,
+    Tuple,
+)
 
+import httpx
+import orjson
 from fastapi import FastAPI
 from starlette.responses import JSONResponse
+
+from sowba_gateway.settings import Downstream, Settings
 
 
 def get_json_schema_dm(downstream, ref):
@@ -26,9 +32,9 @@ def find_resolver_paths(downstreams, result, ref):
         for path, path_data in downstream.spec["paths"].items():
             if "get" not in path_data.keys():
                 continue
-            aref = path_data["get"]["responses"]["200"]["content"]["application/json"][
-                "schema"
-            ]["$ref"]
+            aref = path_data["get"]["responses"]["200"]["content"]["application/json"]["schema"][
+                "$ref"
+            ]
             if aref != ref:
                 continue
             model = get_json_schema_dm(downstream, ref)
@@ -55,7 +61,6 @@ async def read_json_resp(resp):
 
 
 class GatewayApp(FastAPI):
-    specs = []
     session: httpx.AsyncClient
 
     def __init__(self, settings: Settings):
@@ -96,9 +101,7 @@ class GatewayApp(FastAPI):
                     for sub_result in result[name]:
                         reqs.append(
                             self.result_merger(
-                                find_resolver_paths(
-                                    self.settings.services, sub_result, sub_ref
-                                ),
+                                find_resolver_paths(self.settings.services, sub_result, sub_ref),
                                 sub_result,
                                 sub_ref,
                             )
@@ -107,9 +110,7 @@ class GatewayApp(FastAPI):
 
                 if "$ref" in prop:
                     await self.result_merger(
-                        find_resolver_paths(
-                            self.settings.services, result[name], prop["$ref"]
-                        ),
+                        find_resolver_paths(self.settings.services, result[name], prop["$ref"]),
                         result[name],
                         prop["$ref"],
                     )
@@ -129,7 +130,7 @@ class GatewayApp(FastAPI):
         path_parts = scope["path"].split("/")
 
         for downstream in self.settings.services:
-            for path, path_data in downstream.spec["paths"].items():
+            for path, path_data in downstream.spec["paths"].items():  # type: ignore
                 if "get" not in path_data.keys():
                     continue
 
@@ -145,15 +146,15 @@ class GatewayApp(FastAPI):
                         else:
                             break
                 else:
-                    ref = path_data["get"]["responses"]["200"]["content"][
-                        "application/json"
-                    ]["schema"]["$ref"]
+                    ref = path_data["get"]["responses"]["200"]["content"]["application/json"][
+                        "schema"
+                    ]["$ref"]
                     matches.append((scope["path"], downstream))
 
         if len(matches) == 0:
-            await self.default(scope, receive, send)
+            await self.default(scope, receive, send)  # type: ignore
         else:
-            result = {}
-            await self.result_merger(matches, result, ref)
+            result: Dict[str, Any] = {}
+            await self.result_merger(matches, result, ref)  # type: ignore
             response = JSONResponse(result, status_code=200)
             await response(scope, receive, send)

@@ -1,12 +1,15 @@
-import pytest
 import asyncio
+import contextlib
+import socket
+
+import pytest
+import uvicorn
+from async_asgi_testclient import TestClient
+
 from sowba_gateway.gateway import GatewayApp
 from sowba_gateway.settings import Downstream, Settings
-from async_asgi_testclient import TestClient
-from .testservices import users, products, reviews
-import socket
-import contextlib
-import uvicorn
+
+from .testservices import products, reviews, users
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,7 +68,5 @@ async def test_gateway_merge_results(gateway_client):
     assert data == {
         "id": "1",
         "name": "Isaac Newton",
-        "reviews": [
-            {"body": "Great!", "product": {"id": "1", "name": "Principia Mathematica"}}
-        ],
+        "reviews": [{"body": "Great!", "product": {"id": "1", "name": "Principia Mathematica"}}],
     }
