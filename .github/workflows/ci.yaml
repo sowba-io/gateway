@@ -56,8 +56,4 @@ jobs:
         run: |
           source $HOME/.poetry/env
           make coverage
-
-      - name: Upload coverage to Open Coverage
-        run: |
-          source $HOME/.poetry/env
           poetry run codecov --url="https://open-coverage.org/api" --token=16489260 --slug=sowba-io/gateway --file=coverage.xml
