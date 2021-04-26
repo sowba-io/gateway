@@ -29,7 +29,7 @@ async def http_server(app):
     api_server = uvicorn.Server(config=uvicorn.Config(app, port=port, host="localhost"))
     task = asyncio.create_task(api_server.serve())
     yield port
-    api_server.force_exit = api_server.should_exit = True
+    api_server.should_exit = True
     await api_server.shutdown()
     await asyncio.wait([task])
 
@@ -57,14 +57,15 @@ async def gateway_client():
                 ]
             )
         )
+        await asyncio.sleep(0.2)
         async with TestClient(app) as client:
             yield client
 
 
 async def test_gateway_merge_results(gateway_client):
     resp = await gateway_client.get("/users/1")
-    assert resp.status_code == 200
     data = resp.json()
+    assert resp.status_code == 200, data
     assert data == {
         "id": "1",
         "name": "Isaac Newton",

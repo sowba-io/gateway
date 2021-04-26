@@ -1,9 +1,4 @@
-from typing import (
-    Any,
-    Dict,
-    List,
-    Optional,
-)
+from typing import List
 
 from pydantic import BaseModel, BaseSettings
 
@@ -11,7 +6,6 @@ from pydantic import BaseModel, BaseSettings
 class Downstream(BaseModel):
     base_url: str
     openapi_url: str
-    spec: Optional[Dict[str, Any]] = None
 
 
 class Settings(BaseSettings):

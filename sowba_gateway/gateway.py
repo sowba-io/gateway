@@ -1,121 +1,60 @@
-import asyncio
 import os
 from typing import (
     Any,
     Dict,
     List,
-    Tuple,
+    cast,
 )
 
 import httpx
-import orjson
 from fastapi import FastAPI
-from starlette.responses import JSONResponse
+from starlette.requests import Request
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.types import Scope
 
-from sowba_gateway.settings import Downstream, Settings
+from sowba_gateway.settings import Settings
 
-
-def get_json_schema_dm(downstream, ref):
-    parts = ref.replace("#/", "").split("/")
-    loc = downstream.spec
-    for part in parts:
-        try:
-            loc = loc[part]
-        except KeyError:
-            return None
-    return loc
-
-
-def find_resolver_paths(downstreams, result, ref):
-    results = []
-    for downstream in downstreams:
-        for path, path_data in downstream.spec["paths"].items():
-            if "get" not in path_data.keys():
-                continue
-            aref = path_data["get"]["responses"]["200"]["content"]["application/json"]["schema"][
-                "$ref"
-            ]
-            if aref != ref:
-                continue
-            model = get_json_schema_dm(downstream, ref)
-            if model is None:
-                continue
-
-            # check if we have to fill data this endpoint provides
-            if len(set(model["properties"].keys()) - set(result.keys())) > 0:
-                real_path = []
-                for path_part in path.split("/"):
-                    if len(path_part) > 1 and path_part[0] == "{":
-                        # need to replace variable with part of data
-                        path_part = result[path_part.strip("{}")]
-                    real_path.append(path_part)
-                results.append(("/".join(real_path), downstream))
-    return results
-
-
-async def read_json_resp(resp):
-    data = b""
-    async for chunk in resp.aiter_bytes():
-        data += chunk
-    return orjson.loads(data)
+from .merger import RequestMerger
+from .routes import RouteMatcher
+from .types import OpenAPISpecType, ServiceType
+from .utils import read_json_resp
 
 
 class GatewayApp(FastAPI):
     session: httpx.AsyncClient
+    services: List[ServiceType]
+    matcher: RouteMatcher
 
     def __init__(self, settings: Settings):
-        super().__init__(on_startup=[self.startup])
+        super().__init__(on_startup=[self.startup], on_shutdown=[self.shutdown])
+        self.session = httpx.AsyncClient()
         self.settings = settings
+        self.services = []
+        self.matcher = RouteMatcher(self.services)
+        self.merger = RequestMerger(self.session, self.services)
+
+    async def shutdown(self) -> None:
+        await self.session.aclose()
 
     async def startup(self) -> None:
         # load downstreams
-        self.session = httpx.AsyncClient()
         for downstream in self.settings.services:
             resp = await self.session.get(downstream.openapi_url)
-            downstream.spec = await read_json_resp(resp)
+            spec = cast(OpenAPISpecType, await read_json_resp(resp))
+            self.services.append(ServiceType(downstream=downstream, spec=spec))
 
-    async def result_merger(
-        self,
-        matches: List[Tuple[str, Downstream]],
-        result: Dict[str, Any],
-        ref: str,
-    ):
-        for path, downstream in matches:
-            url = os.path.join(downstream.base_url, path.lstrip("/"))
-            resp = await self.session.get(url)
-            result.update(await read_json_resp(resp))
+    async def proxy_request(self, scope: Scope, receive, send, url: str):
+        request = Request(scope, receive, send)
+        func = getattr(self.session, request.method)
+        downstream_resp = await func(url, data=request.stream())
+        req_resp = StreamingResponse(
+            downstream_resp.aiter_bytes(),
+            status_code=downstream_resp.status_code,
+            headers=downstream_resp.headers,
+        )
+        await req_resp(scope, receive, send)
 
-        # look for referenced refs to check resolution for
-        for downstream in self.settings.services:
-            model = get_json_schema_dm(downstream, ref)
-            if model is None:
-                continue
-
-            for name, prop in model["properties"].items():
-                if name not in result:
-                    continue
-
-                if prop.get("type") == "array" and "$ref" in prop["items"]:
-                    reqs = []
-                    sub_ref = prop["items"]["$ref"]
-                    for sub_result in result[name]:
-                        reqs.append(
-                            self.result_merger(
-                                find_resolver_paths(self.settings.services, sub_result, sub_ref),
-                                sub_result,
-                                sub_ref,
-                            )
-                        )
-                    await asyncio.wait(reqs)
-
-                if "$ref" in prop:
-                    await self.result_merger(
-                        find_resolver_paths(self.settings.services, result[name], prop["$ref"]),
-                        result[name],
-                        prop["$ref"],
-                    )
-
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Scope, receive, send) -> None:
         scope["app"] = self
 
         assert scope["type"] in ("http", "websocket", "lifespan")
@@ -124,37 +63,46 @@ class GatewayApp(FastAPI):
             await self.router.lifespan(scope, receive, send)
             return
 
-        # match incoming url
-        matches = []
-        ref = None
-        path_parts = scope["path"].split("/")
-
-        for downstream in self.settings.services:
-            for path, path_data in downstream.spec["paths"].items():  # type: ignore
-                if "get" not in path_data.keys():
-                    continue
-
-                if len(path_parts) != len(path.split("/")):
-                    continue
-
-                for idx, path_part in enumerate(path.split("/")):
-                    if idx >= len(path_parts):
-                        break
-                    if path_parts[idx] != path_part:
-                        if path_part[0] == "{":
-                            continue
-                        else:
-                            break
-                else:
-                    ref = path_data["get"]["responses"]["200"]["content"]["application/json"][
-                        "schema"
-                    ]["$ref"]
-                    matches.append((scope["path"], downstream))
+        method = scope["method"].lower()
+        matches = self.matcher.find_routes(method=method, path=scope["path"])
 
         if len(matches) == 0:
-            await self.default(scope, receive, send)  # type: ignore
-        else:
-            result: Dict[str, Any] = {}
-            await self.result_merger(matches, result, ref)  # type: ignore
-            response = JSONResponse(result, status_code=200)
+            response = JSONResponse({"reason": "noRouteFound"}, status_code=404)
             await response(scope, receive, send)
+        elif method != "get" or len(matches) == 1:
+            if len(matches) > 1:
+                response = JSONResponse(
+                    {"reason": "ambiguousRoute", "details": "Multiple routes matched request"},
+                    status_code=500,
+                )
+                await response(scope, receive, send)
+            else:
+                # proxy these requests
+                url = os.path.join(
+                    matches[0].service.downstream.base_url, scope["path"].lstrip("/")
+                )
+                await self.proxy_request(scope, receive, send, url)
+        else:
+            # validate all refs match for mergable routes
+            refs = [m.ref for m in matches]
+            if refs.count(refs[0]) != len(refs):
+                response = JSONResponse(
+                    {
+                        "reason": "ambiguousRoute",
+                        "details": "Conflicting downstream services",
+                        "refs": [
+                            {
+                                "service": match.service.spec.get("info"),
+                                "ref": match.ref,
+                            }
+                            for match in matches
+                        ],
+                    },
+                    status_code=500,
+                )
+                await response(scope, receive, send)
+            else:
+                result: Dict[str, Any] = {}
+                await self.merger.merge(matches, result, refs[0])
+                response = JSONResponse(result, status_code=200)
+                await response(scope, receive, send)
