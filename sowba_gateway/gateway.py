@@ -20,6 +20,25 @@ from .types import OpenAPISpecType, ServiceType
 from .utils import read_json_resp
 
 
+def merge(source: Dict[str, Any], destination: Dict[str, Any]) -> Dict[str, Any]:
+    """"""
+    for key, value in source.items():
+        if isinstance(value, dict):
+            # get node or create one
+            node = destination.setdefault(key, {})
+            merge(value, node)
+        else:
+            destination[key] = value
+
+    return destination
+
+
+PASSTHROUGH_PATHS = (
+    "/redoc",
+    "/docs",
+)
+
+
 class GatewayApp(FastAPI):
     session: httpx.AsyncClient
     services: List[ServiceType]
@@ -54,6 +73,13 @@ class GatewayApp(FastAPI):
         )
         await req_resp(scope, receive, send)
 
+    def open_api_response(self) -> JSONResponse:
+        result: Dict[str, Any] = {}
+        for service in self.services:
+            merge(service.spec, result)  # type: ignore
+
+        return JSONResponse(result, status_code=200)
+
     async def __call__(self, scope: Scope, receive, send) -> None:
         scope["app"] = self
 
@@ -64,6 +90,15 @@ class GatewayApp(FastAPI):
             return
 
         method = scope["method"].lower()
+
+        if method == "get":
+            if scope["path"] in PASSTHROUGH_PATHS:
+                return await super().__call__(scope, receive, send)
+            elif scope["path"] == "/openapi.json":
+                response = self.open_api_response()
+                await response(scope, receive, send)
+                return
+
         matches = self.matcher.find_routes(method=method, path=scope["path"])
 
         if len(matches) == 0:
